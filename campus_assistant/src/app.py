@@ -1514,6 +1514,13 @@ def render_voice_input() -> None:
         <script>
         const doc = window.parent.document;
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const MIC_ID = 'voiceMicButton';
+        const STATUS_ID = 'voiceMicStatus';
+        const OBSERVER_KEY = '__campusVoiceObserver';
+        const RESIZE_KEY = '__campusVoiceResize';
+        const SCROLL_KEY = '__campusVoiceScroll';
+        const INTERVAL_KEY = '__campusVoiceInterval';
+        window.parent.__campusVoiceEnabled = true;
 
         function findChatTextarea() {
           return doc.querySelector('.st-key-chat_input_zone textarea')
@@ -1521,11 +1528,20 @@ def render_voice_input() -> None:
             || doc.querySelector('textarea[placeholder*="校园"]');
         }
 
+        function hasChatInputZone() {
+          return Boolean(doc.querySelector('.st-key-chat_input_zone') && findChatTextarea());
+        }
+
+        function removeVoiceControls() {
+          doc.getElementById(MIC_ID)?.remove();
+          doc.getElementById(STATUS_ID)?.remove();
+        }
+
         function findSendButton() {
           const zone = doc.querySelector('.st-key-chat_input_zone');
           const buttons = [...(zone || doc).querySelectorAll('button')];
           return buttons
-            .filter((item) => item.id !== 'voiceMicButton')
+            .filter((item) => item.id !== MIC_ID)
             .find((item) => {
               const rect = item.getBoundingClientRect();
               return rect.width > 20 && rect.height > 20 && rect.top > window.parent.innerHeight / 2;
@@ -1533,8 +1549,12 @@ def render_voice_input() -> None:
         }
 
         function positionVoiceControls() {
-          const button = doc.getElementById('voiceMicButton');
-          const status = doc.getElementById('voiceMicStatus');
+          if (!window.parent.__campusVoiceEnabled || !hasChatInputZone()) {
+            removeVoiceControls();
+            return;
+          }
+          const button = doc.getElementById(MIC_ID);
+          const status = doc.getElementById(STATUS_ID);
           const sendButton = findSendButton();
           const textarea = findChatTextarea();
           if (!button || !sendButton) return;
@@ -1569,10 +1589,17 @@ def render_voice_input() -> None:
 
         function ensureVoiceControls() {
           const zone = doc.querySelector('.st-key-chat_input_zone');
-          if (!zone || doc.getElementById('voiceMicButton')) return;
+          if (!window.parent.__campusVoiceEnabled || !zone || !findChatTextarea()) {
+            removeVoiceControls();
+            return;
+          }
+          if (doc.getElementById(MIC_ID)) {
+            positionVoiceControls();
+            return;
+          }
 
           const button = doc.createElement('button');
-          button.id = 'voiceMicButton';
+          button.id = MIC_ID;
           button.className = 'voice-mic-button';
           button.type = 'button';
           button.title = '语音输入';
@@ -1585,14 +1612,12 @@ def render_voice_input() -> None:
             </svg>`;
 
           const status = doc.createElement('span');
-          status.id = 'voiceMicStatus';
+          status.id = STATUS_ID;
           status.className = 'voice-mic-status';
 
           doc.body.appendChild(button);
           doc.body.appendChild(status);
           positionVoiceControls();
-          window.parent.addEventListener('resize', positionVoiceControls);
-          window.parent.addEventListener('scroll', positionVoiceControls, true);
 
           if (!SpeechRecognition) {
             button.disabled = true;
@@ -1638,11 +1663,66 @@ def render_voice_input() -> None:
           });
         }
 
+        function syncVoiceControls() {
+          if (hasChatInputZone()) {
+            ensureVoiceControls();
+            positionVoiceControls();
+          } else {
+            removeVoiceControls();
+          }
+        }
+
+        if (window.parent[OBSERVER_KEY]) {
+          window.parent[OBSERVER_KEY].disconnect();
+        }
+        window.parent[OBSERVER_KEY] = new MutationObserver(() => {
+          window.parent.requestAnimationFrame(syncVoiceControls);
+        });
+        window.parent[OBSERVER_KEY].observe(doc.body, { childList: true, subtree: true });
+
+        if (window.parent[RESIZE_KEY]) {
+          window.parent.removeEventListener('resize', window.parent[RESIZE_KEY]);
+        }
+        window.parent[RESIZE_KEY] = syncVoiceControls;
+        window.parent.addEventListener('resize', window.parent[RESIZE_KEY]);
+
+        if (window.parent[SCROLL_KEY]) {
+          window.parent.removeEventListener('scroll', window.parent[SCROLL_KEY], true);
+        }
+        window.parent[SCROLL_KEY] = syncVoiceControls;
+        window.parent.addEventListener('scroll', window.parent[SCROLL_KEY], true);
+
+        if (window.parent[INTERVAL_KEY]) {
+          clearInterval(window.parent[INTERVAL_KEY]);
+        }
+        window.parent[INTERVAL_KEY] = setInterval(syncVoiceControls, 500);
+
         ensureVoiceControls();
         positionVoiceControls();
-        setTimeout(() => { ensureVoiceControls(); positionVoiceControls(); }, 300);
-        setTimeout(() => { ensureVoiceControls(); positionVoiceControls(); }, 1200);
-        setInterval(positionVoiceControls, 1500);
+        setTimeout(syncVoiceControls, 80);
+        setTimeout(syncVoiceControls, 260);
+        </script>
+        """,
+        height=0,
+    )
+
+
+def cleanup_voice_input() -> None:
+    components.html(
+        """
+        <script>
+        const doc = window.parent.document;
+        window.parent.__campusVoiceEnabled = false;
+        doc.getElementById('voiceMicButton')?.remove();
+        doc.getElementById('voiceMicStatus')?.remove();
+        if (window.parent.__campusVoiceObserver) {
+          window.parent.__campusVoiceObserver.disconnect();
+          window.parent.__campusVoiceObserver = null;
+        }
+        if (window.parent.__campusVoiceInterval) {
+          clearInterval(window.parent.__campusVoiceInterval);
+          window.parent.__campusVoiceInterval = null;
+        }
         </script>
         """,
         height=0,
@@ -1945,10 +2025,13 @@ with st.container(key="main_content"):
 
     active_panel = st.session_state.get("active_panel", "chat")
     if active_panel == "services":
+        cleanup_voice_input()
         render_service_panel()
     elif active_panel == "search":
+        cleanup_voice_input()
         render_search_panel(agent, df, top_k)
     elif active_panel == "data":
+        cleanup_voice_input()
         render_data_panel(df)
     else:
         messages = st.session_state.messages
